@@ -61,6 +61,7 @@ PostgreSQL is a trademark or registered trademark of PostgreSQL Global Developme
 | 3 | h-deploy-maas | [MAAS](/t/14293) |
 | 3 | h-deploy-ec2 | [AWS EC2](/t/15703) |
 | 3 | h-deploy-gce | [GCE](/t/15722) |
+| 3 | h-deploy-multi-az | [Multi-AZ](/t/15749) |
 | 3 | h-deploy-terraform | [Terraform](/t/14916) |
 | 3 | h-deploy-airgapped | [Air-gapped](/t/15746) |
 | 2 | h-integrate | [Integrate with another application](/t/9687) |
