@@ -1,6 +1,6 @@
 # How to deploy on LXD
 
-This guide assumes you have a running Juju and LXD environment. 
+This guide assumes you have a running Juju and [LXD](https://documentation.ubuntu.com/lxd/en/latest/getting_started/) environment. 
 
 For a detailed walkthrough of setting up an environment and deploying the charm on LXD, refer to the [Tutorial](/t/9707).
 
@@ -39,6 +39,4 @@ Machine  State    Address       Inst id        Series  AZ  Message
 0        started  10.89.49.129  juju-a8a31d-0  jammy       Running
 ```
 
-[note]
-If you expect having several concurrent connections frequently, it is highly recommended to deploy [PgBouncer](https://charmhub.io/pgbouncer?channel=1/stable) alongside PostgreSQL. For more information, read our explanation about [Connection pooling](/t/15777).
-[/note]
+> **Note**: If you expect having several concurrent connections frequently, it is highly recommended to deploy [PgBouncer](https://charmhub.io/pgbouncer?channel=1/stable) alongside PostgreSQL. For more information, read our explanation about [Connection pooling](/t/15777).

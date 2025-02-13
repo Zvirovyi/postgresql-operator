@@ -1,17 +1,13 @@
->Reference > Release Notes > [All revisions] > Revision 544/545
+>Reference > Release Notes > [All revisions] > Revision 552/553
 
-[note type=caution]
-This page is a work in progress for a **future release**. Please revisit at a later date!
-[/note]
-
-# Revision 544/545
-<sub><TODO></sub>
+# Revision 552/553
+<sub>February 4, 2025</sub>
 
 Canonical's newest Charmed PostgreSQL operator has been published in the [14/stable channel].
 
 Due to the newly added support for `arm64` architecture, the PostgreSQL charm now releases multiple revisions simultaneously:
-* Revision <TODO> is built for `amd64` on Ubuntu 22.04 LTS
-* Revision <TODO> is built for `arm64` on Ubuntu 22.04 LTS
+* Revision 553 is built for `amd64` on Ubuntu 22.04 LTS
+* Revision 552 is built for `arm64` on Ubuntu 22.04 LTS
 
 > See also: [How to perform a minor upgrade]
 
@@ -64,6 +60,11 @@ Due to the newly added support for `arm64` architecture, the PostgreSQL charm no
 * Allow `--restore-to-time=latest` without a `backup-id` in ([PR#683](https://github.com/canonical/postgresql-operator/pull/683))
 * Clean-up duplicated Patroni config reloads in ([PR#682](https://github.com/canonical/postgresql-operator/pull/682))
 * Filter out degraded read only endpoints in ([PR#679](https://github.com/canonical/postgresql-operator/pull/679)) ([DPE-5714](https://warthogs.atlassian.net/browse/DPE-5714))
+* remove clutter from singlestat panels in cos ([PR#702](https://github.com/canonical/postgresql-operator/pull/702))
+* Catch wrong parameters exception on bucket create function call ([PR#701](https://github.com/canonical/postgresql-operator/pull/701)) ([DPE-5713](https://warthogs.atlassian.net/browse/DPE-5714))
+* Split topology script ([PR#729](https://github.com/canonical/postgresql-operator/pull/729)) ([DPE-6377](https://warthogs.atlassian.net/browse/DPE-6377)) 
+* Fix typos in COS alert rules ([PR#724](https://github.com/canonical/postgresql-operator/pull/724)) ([DPE-6171](https://warthogs.atlassian.net/browse/DPE-6171))
+* Add plugins preload libs to regular startup parameters ([PR#741](https://github.com/canonical/postgresql-operator/pull/741)) ([DPE-6056](https://warthogs.atlassian.net/browse/DPE-6056))
 
 [details=Libraries, testing, and CI]
 * Data Interafces v40 ([PR #615](https://github.com/canonical/postgresql-operator/pull/615)) ([DPE-5306](https://warthogs.atlassian.net/browse/DPE-5306))
@@ -81,12 +82,13 @@ Due to the newly added support for `arm64` architecture, the PostgreSQL charm no
 * Update Juju agents ([PR #634](https://github.com/canonical/postgresql-operator/pull/634))
 * Bump libs ([PR #677](https://github.com/canonical/postgresql-operator/pull/677))
 * Increase linting rules ([PR #649](https://github.com/canonical/postgresql-operator/pull/649)) ([DPE-5324](https://warthogs.atlassian.net/browse/DPE-5324))
+* Update dependency pyOpenSSL to v25 ([PR#725](https://github.com/canonical/postgresql-operator/pull/677)) 
 [/details]
 
 ## Requirements and compatibility
+* (recommended) Juju LTS 3.6.1+ 
 * (no change) Minimum Juju 2 version: `v.2.9.49`
 * (no change) Minimum Juju 3 version: `v.3.4.3`
-* (recommended) Juju LTS 3.6.1+ 
 
 See the [system requirements] for more details about Juju versions and other software and hardware prerequisites.
 
