@@ -9,14 +9,14 @@ To see all releases and commits, check the [Charmed PostgreSQL Releases page on 
 ## Dependencies and supported features
 
 For a given release, this table shows:
-* The PostgreSQL version packaged inside
+* The PostgreSQL version packaged inside.
 * The minimum Juju 3 version required to reliably operate **all** features of the release
    > This charm still supports older versions of Juju down to 2.9. See the [Juju section of the system requirements](/t/11743) for more details.
 * Support for specific features
 
 | Release | PostgreSQL version | Juju 3 version | [TLS encryption](/t/9685)* | [COS monitoring](/t/10600) | [Minor version upgrades](/t/12089) | [Cross-regional async replication](/t/15412) | [Point-in-time recovery](/t/9693) |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| [544], [545] (14/candidate) | 14.15 | `3.6.1+` | ![check] | ![check] | ![check] | ![check] | ![check] |
+| [552], [553] | 14.15 | `3.6.1+` | ![check] | ![check] | ![check] | ![check] | ![check] |
 | [467], [468] | 14.12 | `3.4.3+` | ![check] | ![check] | ![check] | ![check] | ![check] |
 | [429], [430] | 14.11 | `3.4.2+` | ![check] | ![check] | ![check] | ![check] |  |
 | [363] | 14.10 | `3.4.2+` | ![check] | ![check] | ![check] | ![check] |  |
@@ -36,23 +36,22 @@ Several [revisions](https://juju.is/docs/sdk/revision) are released simultaneous
 
 > If you deploy a specific revision, **you must make sure it matches your base and architecture** via the tables below or with [`juju info`](https://juju.is/docs/juju/juju-info)
 
-<!-- TODO: Fill in arch columns and remove "14/stable" from previous table
-### Release 544-545 (`14/candidate`)
+### Release 552-553
 
 | Revision | amd64 | arm64 | Ubuntu 22.04 LTS
 |:--------:|:-----:|:-----:|:-----:|
-|[545]  | ![check] |        |  ![check]  |
-|[544] |          | ![check] |  ![check]  |
---->
+|[553]  | ![check] |        |  ![check]  |
+|[552] |          | ![check] |  ![check]  |
 
-### Release 467-468 (`14/stable`)
+[details=Older releases]
+
+### Release 467-468
 
 | Revision | amd64 | arm64 | Ubuntu 22.04 LTS
 |:--------:|:-----:|:-----:|:-----:|
 |[468]  |![check] | | ![check]  |
 |[467] |  | ![check]| ![check] |
 
-[details=Older releases]
 ### Release 429-430
 
 | Revision | amd64 | arm64 | Ubuntu 22.04 LTS
@@ -93,13 +92,11 @@ Several [revisions](https://juju.is/docs/sdk/revision) are released simultaneous
 
 For a list of all plugins supported for each revision, see the reference page [Plugins/extensions](/t/10946).
 
-[note]
- Our release notes are an ongoing work in progress. If there is any additional information about releases that you would like to see or suggestions for other improvements, don't hesitate to contact us on [Matrix ](https://matrix.to/#/#charmhub-data-platform:ubuntu.com) or [leave a comment](https://discourse.charmhub.io/t/charmed-postgresql-reference-release-notes/11875).
-[/note]
+> **Note**: Our release notes are an ongoing work in progress. If there is any additional information about releases that you would like to see or suggestions for other improvements, don't hesitate to contact us on [Matrix ](https://matrix.to/#/#charmhub-data-platform:ubuntu.com) or [leave a comment](https://discourse.charmhub.io/t/charmed-postgresql-reference-release-notes/11875).
 
 <!-- LINKS-->
-[545]: /t/16007
-[544]: /t/16007
+[553]: /t/16007
+[552]: /t/16007
 [468]: /t/15378
 [467]: /t/15378
 [430]: /t/14067
@@ -108,6 +105,7 @@ For a list of all plugins supported for each revision, see the reference page [P
 [351]: /t/12823
 [336]: /t/11877
 [288]: /t/11876
+
 
 <!--BADGES-->
 [check]: https://img.icons8.com/color/20/checkmark--v1.png
