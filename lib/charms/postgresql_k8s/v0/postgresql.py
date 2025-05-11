@@ -868,7 +868,7 @@ END; $$;"""
             logger.error(f"Failed to drop Postgresql publication: {e}")
             raise PostgreSQLDropPublicationError() from e
 
-    def create_subscription(self, subscription: str, host: str, db: str, user: str, password: str, replication_slot: str) -> None:
+    def create_subscription(self, subscription: str, host: str, db: str, user: str, password: str, publication: str, replication_slot: str) -> None:
         """Create PostgreSQL subscription."""
         try:
             with self._connect_to_database(database=db) as connection, connection.cursor() as cursor:
@@ -876,7 +876,7 @@ END; $$;"""
                     SQL("CREATE SUBSCRIPTION {} CONNECTION {} PUBLICATION {} WITH (copy_data=true,create_slot=false,enabled=true,slot_name={});").format(
                         Identifier(subscription),
                         Literal(f"host={host} dbname={db} user={user} password={password}"),
-                        Identifier(subscription),
+                        Identifier(publication),
                         Identifier(replication_slot)
                     )
                 )

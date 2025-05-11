@@ -110,7 +110,10 @@ from relations.async_replication import (
     PostgreSQLAsyncReplication,
 )
 from relations.db import EXTENSIONS_BLOCKING_MESSAGE, DbProvides
-from relations.logical_replication import PostgreSQLLogicalReplication
+from relations.logical_replication import (
+    LOGICAL_REPLICATION_VALIDATION_ERROR_STATUS,
+    PostgreSQLLogicalReplication,
+)
 from relations.postgresql_provider import PostgreSQLProvider
 from rotate_logs import RotateLogs
 from upgrade import PostgreSQLUpgrade, get_postgresql_dependencies_model
@@ -1168,6 +1171,9 @@ class PostgresqlOperatorCharm(TypedCharmBase[CharmConfig]):
         # Update the sync-standby endpoint in the async replication data.
         self.async_replication.update_async_replication_data()
 
+        if not self.logical_replication.apply_changed_config(event):
+            return
+
         if not self.unit.is_leader():
             return
 
@@ -1636,6 +1642,8 @@ class PostgresqlOperatorCharm(TypedCharmBase[CharmConfig]):
 
         self.backup.coordinate_stanza_fields()
 
+        self.logical_replication.retry_validations()
+
         self._set_primary_status_message()
 
         # Restart topology observer if it is gone
@@ -1710,7 +1718,11 @@ class PostgresqlOperatorCharm(TypedCharmBase[CharmConfig]):
             logger.debug("Early exit on_update_status: upgrade in progress")
             return False
 
-        if self.is_blocked and self.unit.status not in S3_BLOCK_MESSAGES:
+        if (
+            self.is_blocked
+            and self.unit.status not in S3_BLOCK_MESSAGES
+            and self.unit.status.message != LOGICAL_REPLICATION_VALIDATION_ERROR_STATUS
+        ):
             # If charm was failing to disable plugin, try again (user may have removed the objects)
             if self.unit.status.message == EXTENSION_OBJECT_MESSAGE:
                 self.enable_disable_extensions()
@@ -1779,6 +1791,9 @@ class PostgresqlOperatorCharm(TypedCharmBase[CharmConfig]):
                 self.unit.status = BlockedStatus(
                     self.app_peer_data["s3-initialization-block-message"]
                 )
+                return
+            if self.unit.is_leader() and "logical-replication-error" in self.app_peer_data:
+                self.unit.status = BlockedStatus(self.app_peer_data["logical-replication-error"])
                 return
             if (
                 self._patroni.get_primary(unit_name_pattern=True) == self.unit.name
@@ -1999,11 +2014,7 @@ class PostgresqlOperatorCharm(TypedCharmBase[CharmConfig]):
             self.model.config, self.get_available_memory(), limit_memory
         )
 
-        replication_slots_json = (
-            json.loads(self.app_peer_data["replication-slots"])
-            if "replication-slots" in self.app_peer_data
-            else None
-        )
+        replication_slots = self.logical_replication.replication_slots()
 
         # Update and reload configuration based on TLS files availability.
         self._patroni.render_patroni_yml_file(
@@ -2019,7 +2030,7 @@ class PostgresqlOperatorCharm(TypedCharmBase[CharmConfig]):
             restore_stanza=self.app_peer_data.get("restore-stanza"),
             parameters=pg_parameters,
             no_peers=no_peers,
-            slots=replication_slots_json,
+            slots=replication_slots or None,
         )
         if no_peers:
             return True
@@ -2056,7 +2067,7 @@ class PostgresqlOperatorCharm(TypedCharmBase[CharmConfig]):
             "wal_keep_size": self.config.durability_wal_keep_size,
         })
 
-        self._patroni.ensure_slots_controller_by_patroni(replication_slots_json or {})
+        self._patroni.ensure_slots_controller_by_patroni(replication_slots)
 
         self._handle_postgresql_restart_need(enable_tls)
 
