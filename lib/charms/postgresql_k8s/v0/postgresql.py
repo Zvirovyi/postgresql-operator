@@ -136,6 +136,9 @@ class PostgreSQLIsTableEmptyError(Exception):
 class PostgreSQLCreatePublicationError(Exception):
     """Exception raised when creating PostgreSQL publication."""
 
+class PostgreSQLAlterPublicationError(Exception):
+    """Exception raised when altering PostgreSQL publication."""
+
 class PostgreSQLDropPublicationError(Exception):
     """Exception raised when dropping PostgreSQL publication."""
 
@@ -147,6 +150,9 @@ class PostgreSQLSubscriptionExistsError(Exception):
 
 class PostgreSQLUpdateSubscriptionError(Exception):
     """Exception raised when updating PostgreSQL subscription."""
+
+class PostgreSQLRefreshSubscriptionError(Exception):
+    """Exception raised when refreshing PostgreSQL subscription."""
 
 class PostgreSQLDropSubscriptionError(Exception):
     """Exception raised when dropping PostgreSQL subscription."""
@@ -855,6 +861,20 @@ END; $$;"""
             logger.error(f"Failed to create Postgresql publication: {e}")
             raise PostgreSQLCreatePublicationError() from e
 
+    def alter_publication(self, db: str, name: str, schematables: list[str]) -> None:
+        """Alter PostgreSQL publication."""
+        try:
+            with self._connect_to_database(database=db) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    SQL("ALTER PUBLICATION {} SET TABLE {};").format(
+                        Identifier(name),
+                        SQL(",").join(Identifier(schematable.split(".")[0], schematable.split(".")[1]) for schematable in schematables)
+                    )
+                )
+        except psycopg2.Error as e:
+            logger.error(f"Failed to alter Postgresql publication: {e}")
+            raise PostgreSQLAlterPublicationError() from e
+
     def drop_publication(self, db: str, publication: str) -> None:
         """Drop PostgreSQL publication."""
         try:
@@ -909,6 +929,22 @@ END; $$;"""
         except psycopg2.Error as e:
             logger.error(f"Failed to update Postgresql subscription: {e}")
             raise PostgreSQLUpdateSubscriptionError() from e
+
+    def refresh_subscription(self, db: str, subscription: str):
+        """Refresh PostgreSQL subscription to pull publication changes."""
+        connection = None
+        try:
+            connection = self._connect_to_database(database=db)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    SQL("ALTER SUBSCRIPTION {} REFRESH PUBLICATION").format(Identifier(subscription))
+                )
+        except psycopg2.Error as e:
+            logger.error(f"Failed to refresh Postgresql subscription: {e}")
+            raise PostgreSQLRefreshSubscriptionError() from e
+        finally:
+            if connection is not None:
+                connection.close()
 
     def drop_subscription(self, db: str, subscription: str) -> None:
         """Drop PostgreSQL subscription."""

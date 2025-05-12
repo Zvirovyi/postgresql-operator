@@ -1022,9 +1022,9 @@ class Patroni:
             timeout=API_REQUEST_TIMEOUT,
             auth=self._patroni_auth,
         )
-        slots_patch: dict[str, dict[str, str] | None] = {
-            slot: None for slot in current_config.json().get("slots", ())
-        }
+        slots_patch: dict[str, dict[str, str] | None] = dict.fromkeys(
+            current_config.json().get("slots", ())
+        )
         for slot, database in slots.items():
             slots_patch[slot] = {
                 "database": database,
