@@ -119,19 +119,20 @@ class PostgreSQLLogicalReplication(Object):
     def _on_offer_relation_broken(self, event: RelationBrokenEvent):
         if not self.charm._peers or self.charm.is_unit_departing:
             logger.debug(
-                f"{LOGICAL_REPLICATION_OFFER_RELATION}: skipping departing unit in broken event"
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} break skipped due to departing unit"
             )
             return
         if not self.charm.unit.is_leader():
             return
-
-        if not self.charm.unit_peer_data.get("sobaka"):
+        if not self.charm.primary_endpoint:
             event.defer()
-            self.charm.unit_peer_data["sobaka"] = "True"
+            logger.debug(
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} break deferred until primary is available"
+            )
             return
 
+        # TODO: fix empty relation data after defer
         publications = json.loads(event.relation.data[self.model.app].get("publications", "{}"))
-        logger.warning(f"AAAA: {json.dumps(publications)}")
         for database, publication in publications.items():
             self.charm.postgresql.drop_publication(database, publication["publication-name"])
 
@@ -140,15 +141,15 @@ class PostgreSQLLogicalReplication(Object):
     def _on_relation_joined(self, event: RelationJoinedEvent):
         if not self.charm.unit.is_leader():
             return
-        if "logical-replication-validation-ongoing" in self.charm.app_peer_data:
+        if self.charm.app_peer_data.get("logical-replication-validation") == "ongoing":
             event.defer()
             logger.debug(
-                "Deferring logical replication joined event as validation is still ongoing"
+                f"{LOGICAL_REPLICATION_RELATION} join deferred due to validation is still ongoing"
             )
             return
-        if "logical-replication-error" in self.charm.app_peer_data:
+        if self.charm.app_peer_data.get("logical-replication-validation") == "error":
             logger.debug(
-                "Logical replication: subscription request wasn't pushed to the relation as there is validation error"
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} join skipped due to validation error"
             )
             return
         event.relation.data[self.model.app]["subscription-request"] = (
@@ -224,7 +225,7 @@ class PostgreSQLLogicalReplication(Object):
             logger.debug(
                 f"Dropped subscription {subscriptions} from database {database} due to relation break"
             )
-        del self.charm.app_peer_data["logical-replication-subscriptions"]
+        self.charm.app_peer_data["logical-replication-subscriptions"] = ""
 
     # endregion
 
@@ -282,10 +283,9 @@ class PostgreSQLLogicalReplication(Object):
         if not self.charm.unit.is_leader():
             return True
         if not self.charm.primary_endpoint:
-            self.charm.app_peer_data["logical-replication-validation-ongoing"] = "True"
+            self.charm.app_peer_data["logical-replication-validation"] = "ongoing"
             event.defer()
             return False
-        del self.charm.app_peer_data["logical-replication-validation-ongoing"]
         if self._validate_subscription_request():
             self._apply_updated_subscription_request()
         return True
@@ -299,8 +299,7 @@ class PostgreSQLLogicalReplication(Object):
         if not self.charm.unit.is_leader() or not self.charm.primary_endpoint:
             return
         if (
-            "logical-replication-validation-ongoing" not in self.charm.app_peer_data
-            and "logical-replication-error" in self.charm.app_peer_data
+            self.charm.app_peer_data.get("logical-replication-validation") == "error"
             and self._validate_subscription_request()
         ):
             self._apply_updated_subscription_request()
@@ -335,14 +334,7 @@ class PostgreSQLLogicalReplication(Object):
                 self.charm.config.logical_replication_subscription_request or "{}"
             )
         except json.JSONDecodeError as err:
-            self.charm.unit.status = BlockedStatus(
-                "Logical replication setup is invalid. Check logs"
-            )
-            logger.error(f"Logical replication: subscription request config decode error: {err}")
-            self.charm.app_peer_data["logical-replication-error"] = (
-                "Logical replication setup is invalid. Check logs"
-            )
-            return False
+            return self._fail_validation(f"JSON decode error {err}")
 
         relation = self.model.get_relation(LOGICAL_REPLICATION_RELATION)
         subscription_request_relation = (
@@ -353,39 +345,16 @@ class PostgreSQLLogicalReplication(Object):
 
         for database, schematables in subscription_request_config.items():
             if not self.charm.postgresql.database_exists(database):
-                self.charm.unit.status = BlockedStatus(
-                    "Logical replication setup is invalid. Check logs"
-                )
-                logger.error(f"Logical replication validation: database {database} doesn't exist")
-                self.charm.app_peer_data["logical-replication-error"] = (
-                    "Logical replication setup is invalid. Check logs"
-                )
-                return False
+                return self._fail_validation(f"database {database} doesn't exist")
             for schematable in schematables:
                 try:
                     schema, table = schematable.split(".")
                 except ValueError:
-                    self.charm.unit.status = BlockedStatus(
-                        "Logical replication setup is invalid. Check logs"
-                    )
-                    logger.error(
-                        f"Logical replication validation: table format isn't right: {schematable}"
-                    )
-                    self.charm.app_peer_data["logical-replication-error"] = (
-                        "Logical replication setup is invalid. Check logs"
-                    )
-                    return False
+                    return self._fail_validation(f"table format isn't right at {schematable}")
                 if not self.charm.postgresql.table_exists(database, schema, table):
-                    self.charm.unit.status = BlockedStatus(
-                        "Logical replication setup is invalid. Check logs"
+                    return self._fail_validation(
+                        f"table {schematable} in database {database} doesn't exist"
                     )
-                    logger.error(
-                        f"Logical replication validation: table {schematable} doesn't exist"
-                    )
-                    self.charm.app_peer_data["logical-replication-error"] = (
-                        "Logical replication setup is invalid. Check logs"
-                    )
-                    return False
                 already_subscribed = (
                     database in subscription_request_relation
                     and schematable in subscription_request_relation[database]
@@ -393,19 +362,19 @@ class PostgreSQLLogicalReplication(Object):
                 if not already_subscribed and not self.charm.postgresql.is_table_empty(
                     database, schema, table
                 ):
-                    self.charm.unit.status = BlockedStatus(
-                        "Logical replication setup is invalid. Check logs"
+                    return self._fail_validation(
+                        f"table {schematable} in database {database} isn't empty"
                     )
-                    logger.error(
-                        f"Logical replication validation: table {schematable} isn't empty"
-                    )
-                    self.charm.app_peer_data["logical-replication-error"] = (
-                        "Logical replication setup is invalid. Check logs"
-                    )
-                    return False
 
-        del self.charm.app_peer_data["logical-replication-error"]
+        self.charm.app_peer_data["logical-replication-validation"] = ""
         return True
+
+    def _fail_validation(self, message: str | None = None) -> bool:
+        if message:
+            logger.error(f"Logical replication validation: {message}")
+        self.charm.app_peer_data["logical-replication-validation"] = "error"
+        self.charm.unit.status = BlockedStatus(LOGICAL_REPLICATION_VALIDATION_ERROR_STATUS)
+        return False
 
     def _validate_new_publication(
         self,
