@@ -314,10 +314,22 @@ class PostgreSQLLogicalReplication(Object):
     def _apply_updated_subscription_request(self):
         if not (relation := self.model.get_relation(LOGICAL_REPLICATION_RELATION)):
             return
-        # TODO: cleanup
+        subscription_request_config = json.loads(
+            self.charm.config.logical_replication_subscription_request or "{}"
+        )
+        subscriptions = json.loads(
+            self.charm.app_peer_data.get("logical-replication-subscriptions", "{}")
+        )
         relation.data[self.model.app]["subscription-request"] = (
             self.charm.config.logical_replication_subscription_request
         )
+        for database, subscription in subscriptions.copy().items():
+            if database in subscription_request_config:
+                continue
+            self.charm.postgresql.drop_subscription(database, subscription)
+            logger.debug(f"Dropped redundant subscription {subscription} from database {database}")
+            del subscriptions[database]
+        self.charm.app_peer_data["logical-replication-subscriptions"] = json.dumps(subscriptions)
 
     def _validate_subscription_request(self) -> bool:
         try:
