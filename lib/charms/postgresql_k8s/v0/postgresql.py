@@ -298,6 +298,7 @@ class PostgreSQL:
         user: str,
         password: Optional[str] = None,
         admin: bool = False,
+        replication: bool = False,
         extra_user_roles: Optional[List[str]] = None,
     ) -> None:
         """Creates a database user.
@@ -341,7 +342,7 @@ class PostgreSQL:
                     user_definition = "ALTER ROLE {}"
                 else:
                     user_definition = "CREATE ROLE {}"
-                user_definition += f"WITH {'NOLOGIN' if user == 'admin' else 'LOGIN'}{' SUPERUSER' if admin else ''} ENCRYPTED PASSWORD '{password}'{'IN ROLE admin CREATEDB' if admin_role else ''}"
+                user_definition += f"WITH {'NOLOGIN' if user == 'admin' else 'LOGIN'}{' SUPERUSER' if admin else ''}{' REPLICATION' if replication else ''} ENCRYPTED PASSWORD '{password}'{'IN ROLE admin CREATEDB' if admin_role else ''}"
                 if privileges:
                     user_definition += f" {' '.join(privileges)}"
                 cursor.execute(SQL("BEGIN;"))
@@ -439,6 +440,57 @@ class PostgreSQL:
         finally:
             if connection is not None:
                 connection.close()
+
+    def grant_replication_privileges(self, user: str, database: str, schematables: list[str], old_schematables: list[str] | None = None) -> None:
+        """Grant CONNECT privilege on database and SELECT privelege on tables.
+
+        Args:
+            user: target user for priveleges grant.
+            database: database to grant CONNECT privilege on.
+            schematables: list of tables with schema notation to grant SELECT privileges on.
+            old_schematables: list of tables with schema notation to revoke all privileges from.
+        """
+        with self._connect_to_database(database=database) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                SQL("GRANT CONNECT ON DATABASE {} TO {};").format(
+                    Identifier(database), Identifier(user)
+                )
+            )
+            if old_schematables:
+                cursor.execute(
+                    SQL("REVOKE ALL PRIVILEGES ON TABLE {} FROM {};").format(
+                        SQL(",").join(Identifier(schematable.split(".")[0], schematable.split(".")[1]) for schematable in old_schematables),
+                        Identifier(user),
+                    )
+                )
+            cursor.execute(
+                SQL("GRANT SELECT ON TABLE {} TO {};").format(
+                    SQL(",").join(Identifier(schematable.split(".")[0], schematable.split(".")[1]) for schematable in schematables),
+                    Identifier(user),
+                )
+            )
+
+    def revoke_replication_privileges(self, user: str, database: str, schematables: list[str]) -> None:
+        """Revoke all privileges from tables and database.
+
+        Args:
+            user: target user for priveleges revocation.
+            database: database to remove all privileges from.
+            schematables: list of tables with schema notation to revoke all privileges from.
+        """
+        with self._connect_to_database(database=database) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                SQL("REVOKE ALL PRIVILEGES ON TABLE {} FROM {};").format(
+                    SQL(",").join(Identifier(schematable.split(".")[0], schematable.split(".")[1]) for schematable in schematables),
+                    Identifier(user),
+                )
+            )
+            cursor.execute(
+                SQL("REVOKE ALL PRIVILEGES ON DATABASE {} FROM {};").format(
+                    Identifier(database), Identifier(user)
+                )
+            )
+        pass
 
     def enable_disable_extensions(
         self, extensions: Dict[str, bool], database: Optional[str] = None

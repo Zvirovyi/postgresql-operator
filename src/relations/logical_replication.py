@@ -25,18 +25,13 @@ from ops import (
 )
 
 from cluster_topology_observer import ClusterTopologyChangeEvent
-from constants import (
-    APP_SCOPE,
-    PEER,
-    USER,
-    USER_PASSWORD_KEY,
-)
+from utils import new_password
 
 logger = logging.getLogger(__name__)
 
 LOGICAL_REPLICATION_OFFER_RELATION = "logical-replication-offer"
 LOGICAL_REPLICATION_RELATION = "logical-replication"
-SECRET_LABEL = "logical-replication-secret"  # noqa: S105
+SECRET_LABEL = "logical-replication-relation"  # noqa: S105
 LOGICAL_REPLICATION_VALIDATION_ERROR_STATUS = "Logical replication setup is invalid. Check logs"
 
 
@@ -135,6 +130,10 @@ class PostgreSQLLogicalReplication(Object):
         publications = json.loads(event.relation.data[self.model.app].get("publications", "{}"))
         for database, publication in publications.items():
             self.charm.postgresql.drop_publication(database, publication["publication-name"])
+
+        secret = self._get_secret(event.relation.id)
+        self.charm.postgresql.delete_user(secret.peek_content()["username"])
+        secret.remove_all_revisions()
 
         self.charm.update_config()
 
@@ -248,14 +247,6 @@ class PostgreSQLLogicalReplication(Object):
         if not self.charm.primary_endpoint:
             event.defer()
             return
-
-        if (
-            len(self.model.relations.get(LOGICAL_REPLICATION_OFFER_RELATION, ()))
-            and event.secret.label == f"{PEER}.{self.model.app.name}.app"
-        ):
-            logger.info("Internal secret changed, updating logical replication secret")
-            for relation in self.model.relations.get(LOGICAL_REPLICATION_OFFER_RELATION, ()):
-                self._get_secret(relation.id)
 
         if (
             relation := self.model.get_relation(LOGICAL_REPLICATION_RELATION)
@@ -413,6 +404,7 @@ class PostgreSQLLogicalReplication(Object):
             relation.data[relation.app].get("subscription-request", "{}")
         )
         publications = json.loads(relation.data[self.model.app].get("publications", "{}"))
+        user = self._get_secret(relation.id).peek_content()["username"]
         errors = []
 
         for database, publication in publications.copy().items():
@@ -423,14 +415,21 @@ class PostgreSQLLogicalReplication(Object):
                 f"Dropped redundant publication {publication['publication-name']} from database {database}"
             )
             del publications[database]
+            self.charm.postgresql.revoke_replication_privileges(
+                user, database, publication["tables"]
+            )
+            logger.debug(f"Revoked replication privileges on database {database} from user {user}")
 
         for database, tables in subscriptions_request.items():
-            # TODO: validation
             if database not in publications:
                 if validation_error := self._validate_new_publication(database, tables):
                     errors.append(validation_error)
                     logger.debug(f"Cannot create new publication: {validation_error}")
                     continue
+                self.charm.postgresql.grant_replication_privileges(user, database, tables)
+                logger.debug(
+                    f"Granted replication privileges on database {database} for user {user}"
+                )
                 publication_name = self._publication_name(relation.id, database)
                 self.charm.postgresql.create_publication(database, publication_name, tables)
                 logger.debug(
@@ -451,6 +450,12 @@ class PostgreSQLLogicalReplication(Object):
                         f"Cannot alter publication {publication_name}: {validation_error}"
                     )
                     continue
+                self.charm.postgresql.grant_replication_privileges(
+                    user, database, tables, publication_tables
+                )
+                logger.debug(
+                    f"Altered replication privileges on database {database} for user {user}"
+                )
                 self.charm.postgresql.alter_publication(database, publication_name, tables)
                 logger.debug(
                     f"Altered publication {publication_name} tables from {','.join(publication_tables)} to {','.join(tables)} in database {database}"
@@ -472,25 +477,36 @@ class PostgreSQLLogicalReplication(Object):
     def _subscription_name(self, relation_id: int, database: str):
         return f"relation_{relation_id}_{database}"
 
+    def _create_user(self, relation_id: int) -> tuple[str, str]:
+        user = f"logical-replication-relation-{relation_id}"
+        password = new_password()
+        self.charm.postgresql.create_user(user, password, replication=True)
+        return user, password
+
     def _get_secret(self, relation_id: int) -> Secret:
         """Returns logical replication secret. Updates, if content changed."""
         secret_label = f"{SECRET_LABEL}-{relation_id}"
-        shared_content = {
-            "primary": self.charm.primary_endpoint,
-            "username": USER,
-            "password": self.charm.get_secret(APP_SCOPE, USER_PASSWORD_KEY),
-        }
+        primary = self.charm.primary_endpoint
         try:
             # Avoid recreating the secret.
             secret = self.charm.model.get_secret(label=secret_label)
             if not secret.id:
                 # Workaround for the secret id not being set with model uuid.
                 secret._id = f"secret://{self.model.uuid}/{secret.get_info().id.split(':')[1]}"
-            if secret.peek_content() != shared_content:
+            if (content := secret.peek_content())["primary"] != primary:
                 logger.info("Updating outdated secret content")
-                secret.set_content(shared_content)
+                content["primary"] = primary
+                secret.set_content(content)
             return secret
         except SecretNotFoundError:
             logger.debug("Secret not found, creating a new one")
             pass
-        return self.charm.model.app.add_secret(content=shared_content, label=secret_label)
+        username, password = self._create_user(relation_id)
+        return self.charm.model.app.add_secret(
+            content={
+                "primary": primary,
+                "username": username,
+                "password": password,
+            },
+            label=secret_label,
+        )
