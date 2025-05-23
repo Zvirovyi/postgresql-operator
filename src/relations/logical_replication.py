@@ -84,46 +84,61 @@ class PostgreSQLLogicalReplication(Object):
 
     def _on_offer_relation_joined(self, event: RelationJoinedEvent):
         if not self.charm.unit.is_leader():
+            logger.debug(
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} join early exit due to unit not being a leader"
+            )
             return
         if not self.charm.primary_endpoint:
-            event.defer()
             logger.debug(
-                f"{LOGICAL_REPLICATION_OFFER_RELATION} join deferred until primary is available"
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} join deferring due to primary unavailability"
             )
+            event.defer()
             return
 
         secret = self._get_secret(event.relation.id)
+        logger.debug(
+            f"Sharing logical replciation secret to the {LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id}"
+        )
         secret.grant(event.relation)
         event.relation.data[self.model.app]["secret-id"] = secret.id
 
     def _on_offer_relation_changed(self, event: RelationChangedEvent):
         if not self.charm.unit.is_leader():
+            logger.debug(
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} change early exit due to unit not being a leader"
+            )
             return
         if not self.charm.primary_endpoint:
-            event.defer()
             logger.debug(
-                f"{LOGICAL_REPLICATION_OFFER_RELATION} change deferred until primary is available"
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} change deferring due to primary unavailability"
             )
+            event.defer()
             return
         self._process_offer(event.relation)
 
     def _on_offer_relation_departed(self, event: RelationDepartedEvent):
         if event.departing_unit == self.charm.unit and self.charm._peers is not None:
+            logger.debug(
+                f"Marking unit as departed for {LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} to skip break"
+            )
             self.charm.unit_peer_data.update({"departing": "True"})
 
     def _on_offer_relation_broken(self, event: RelationBrokenEvent):
         if not self.charm._peers or self.charm.is_unit_departing:
             logger.debug(
-                f"{LOGICAL_REPLICATION_OFFER_RELATION} break skipped due to departing unit"
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} break early exit due to unit departure"
             )
             return
         if not self.charm.unit.is_leader():
+            logger.debug(
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} break early exit due to unit not being a leader"
+            )
             return
         if not self.charm.primary_endpoint:
-            event.defer()
             logger.debug(
-                f"{LOGICAL_REPLICATION_OFFER_RELATION} break deferred until primary is available"
+                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} break deferring due to primary unavailability"
             )
+            event.defer()
             return
 
         # TODO: fix empty relation data after defer
@@ -139,16 +154,19 @@ class PostgreSQLLogicalReplication(Object):
 
     def _on_relation_joined(self, event: RelationJoinedEvent):
         if not self.charm.unit.is_leader():
+            logger.debug(
+                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} join early exit due to unit not being a leader"
+            )
             return
         if self.charm.app_peer_data.get("logical-replication-validation") == "ongoing":
-            event.defer()
             logger.debug(
-                f"{LOGICAL_REPLICATION_RELATION} join deferred due to validation is still ongoing"
+                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} join deferring due to still ongoing validation"
             )
+            event.defer()
             return
         if self.charm.app_peer_data.get("logical-replication-validation") == "error":
             logger.debug(
-                f"{LOGICAL_REPLICATION_OFFER_RELATION} join skipped due to validation error"
+                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} join early exit due to validation error"
             )
             return
         event.relation.data[self.model.app]["subscription-request"] = (
@@ -397,17 +415,20 @@ class PostgreSQLLogicalReplication(Object):
 
     def _relation_changed_checks(self, event: RelationChangedEvent) -> bool:
         if not self.charm.unit.is_leader():
+            logger.debug(
+                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} change early exit due to unit not being a leader"
+            )
             return False
         if not event.relation.data[event.app].get("secret-id"):
             logger.warning(
-                f"{LOGICAL_REPLICATION_RELATION} change skipped due to secret absence in remote application data"
+                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} change early exit due to secret absence in remote application bag"
             )
             return False
         if not self.charm.primary_endpoint:
-            event.defer()
             logger.debug(
-                f"{LOGICAL_REPLICATION_RELATION} change deferred until primary is available"
+                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} change deferring due to primary unavailability"
             )
+            event.defer()
             return False
         return True
 
@@ -492,6 +513,9 @@ class PostgreSQLLogicalReplication(Object):
     def _create_user(self, relation_id: int) -> tuple[str, str]:
         user = f"logical-replication-relation-{relation_id}"
         password = new_password()
+        logger.debug(
+            f"Creating new user {user} for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation_id}"
+        )
         self.charm.postgresql.create_user(user, password, replication=True)
         return user, password
 
@@ -506,12 +530,16 @@ class PostgreSQLLogicalReplication(Object):
                 # Workaround for the secret id not being set with model uuid.
                 secret._id = f"secret://{self.model.uuid}/{secret.get_info().id.split(':')[1]}"
             if (content := secret.peek_content())["primary"] != primary:
-                logger.info("Updating outdated secret content")
+                logger.debug(
+                    f"Updating secret for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation_id}"
+                )
                 content["primary"] = primary
                 secret.set_content(content)
             return secret
         except SecretNotFoundError:
-            logger.debug("Secret not found, creating a new one")
+            logger.debug(
+                f"Creating new secret for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation_id}"
+            )
             pass
         username, password = self._create_user(relation_id)
         return self.charm.model.app.add_secret(
