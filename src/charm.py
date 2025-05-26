@@ -1792,9 +1792,9 @@ class PostgresqlOperatorCharm(TypedCharmBase[CharmConfig]):
                     self.app_peer_data["s3-initialization-block-message"]
                 )
                 return
-            if (
-                self.unit.is_leader()
-                and self.app_peer_data.get("logical-replication-validation") == "error"
+            if self.unit.is_leader() and (
+                self.app_peer_data.get("logical-replication-validation") == "error"
+                or self.logical_replication.has_remote_publisher_errors()
             ):
                 self.unit.status = BlockedStatus(LOGICAL_REPLICATION_VALIDATION_ERROR_STATUS)
                 return

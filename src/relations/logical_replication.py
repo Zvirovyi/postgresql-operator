@@ -8,7 +8,9 @@ TODO: add description after specification is accepted.
 
 import json
 import logging
-from os import eventfd
+from typing import (
+    TYPE_CHECKING,
+)
 
 from ops import (
     BlockedStatus,
@@ -28,6 +30,9 @@ from ops import (
 from cluster_topology_observer import ClusterTopologyChangeEvent
 from utils import new_password
 
+if TYPE_CHECKING:
+    from charm import PostgresqlOperatorCharm
+
 logger = logging.getLogger(__name__)
 
 LOGICAL_REPLICATION_OFFER_RELATION = "logical-replication-offer"
@@ -39,7 +44,7 @@ LOGICAL_REPLICATION_VALIDATION_ERROR_STATUS = "Logical replication setup is inva
 class PostgreSQLLogicalReplication(Object):
     """Defines the logical-replication logic."""
 
-    def __init__(self, charm):
+    def __init__(self, charm: "PostgresqlOperatorCharm"):
         super().__init__(charm, "postgresql_logical_replication")
         self.charm = charm
         # Relations
@@ -83,7 +88,7 @@ class PostgreSQLLogicalReplication(Object):
 
     # region Relations
 
-    def _on_offer_relation_joined(self, event: RelationJoinedEvent):
+    def _on_offer_relation_joined(self, event: RelationJoinedEvent) -> None:
         if not self.charm.unit.is_leader():
             logger.debug(
                 f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} join early exit due to unit not being a leader"
@@ -91,7 +96,7 @@ class PostgreSQLLogicalReplication(Object):
             return
         if not self.charm.primary_endpoint:
             logger.debug(
-                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} join deferring due to primary unavailability"
+                f"Deferring {LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} join due to primary unavailability"
             )
             event.defer()
             return
@@ -105,7 +110,7 @@ class PostgreSQLLogicalReplication(Object):
         self._save_published_resources_info(str(event.relation.id), secret.id, {})
         event.relation.data[self.model.app]["secret-id"] = secret.id
 
-    def _on_offer_relation_changed(self, event: RelationChangedEvent):
+    def _on_offer_relation_changed(self, event: RelationChangedEvent) -> None:
         if not self.charm.unit.is_leader():
             logger.debug(
                 f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} change early exit due to unit not being a leader"
@@ -113,20 +118,20 @@ class PostgreSQLLogicalReplication(Object):
             return
         if not self.charm.primary_endpoint:
             logger.debug(
-                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} change deferring due to primary unavailability"
+                f"Deferring {LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} change due to primary unavailability"
             )
             event.defer()
             return
         self._process_offer(event.relation)
 
-    def _on_offer_relation_departed(self, event: RelationDepartedEvent):
+    def _on_offer_relation_departed(self, event: RelationDepartedEvent) -> None:
         if event.departing_unit == self.charm.unit and self.charm._peers is not None:
             logger.debug(
                 f"Marking unit as departed for {LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} to skip break"
             )
             self.charm.unit_peer_data.update({"departing": "True"})
 
-    def _on_offer_relation_broken(self, event: RelationBrokenEvent):
+    def _on_offer_relation_broken(self, event: RelationBrokenEvent) -> None:
         if not self.charm._peers or self.charm.is_unit_departing:
             logger.debug(
                 f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} break early exit due to unit departure"
@@ -139,7 +144,7 @@ class PostgreSQLLogicalReplication(Object):
             return
         if not self.charm.primary_endpoint:
             logger.debug(
-                f"{LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} break deferring due to primary unavailability"
+                f"Deferring {LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id} break due to primary unavailability"
             )
             event.defer()
             return
@@ -155,6 +160,9 @@ class PostgreSQLLogicalReplication(Object):
         for relation_id, relation_resources in published_resources.copy().items():
             if relation_id in active_relation_ids:
                 continue
+            logger.info(
+                f"Cleaning up published logical replication resources for the redundant {LOGICAL_REPLICATION_OFFER_RELATION} #{relation_id}"
+            )
             try:
                 secret = self.model.get_secret(id=relation_resources["secret-id"])
                 self.charm.postgresql.delete_user(secret.peek_content()["username"])
@@ -170,7 +178,7 @@ class PostgreSQLLogicalReplication(Object):
 
         self.charm.update_config()
 
-    def _on_relation_joined(self, event: RelationJoinedEvent):
+    def _on_relation_joined(self, event: RelationJoinedEvent) -> None:
         if not self.charm.unit.is_leader():
             logger.debug(
                 f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} join early exit due to unit not being a leader"
@@ -178,7 +186,7 @@ class PostgreSQLLogicalReplication(Object):
             return
         if self.charm.app_peer_data.get("logical-replication-validation") == "ongoing":
             logger.debug(
-                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} join deferring due to still ongoing validation"
+                f"Deferring {LOGICAL_REPLICATION_RELATION} #{event.relation.id} join due to still ongoing logical replication config validation"
             )
             event.defer()
             return
@@ -191,9 +199,15 @@ class PostgreSQLLogicalReplication(Object):
             self.charm.config.logical_replication_subscription_request or ""
         )
 
-    def _on_relation_changed(self, event: RelationChangedEvent):
+    def _on_relation_changed(self, event: RelationChangedEvent) -> None:
         if not self._relation_changed_checks(event):
             return
+
+        for error in json.loads(event.relation.data[event.app].get("errors", "[]")):
+            logger.error(
+                f"Got logical replication error from the publisher in {LOGICAL_REPLICATION_RELATION} #{event.relation.id}: {error}"
+            )
+            self.charm.unit.status = BlockedStatus(LOGICAL_REPLICATION_VALIDATION_ERROR_STATUS)
 
         secret_content = self.model.get_secret(
             id=event.relation.data[event.app]["secret-id"]
@@ -207,7 +221,7 @@ class PostgreSQLLogicalReplication(Object):
             subscription_name = self._subscription_name(event.relation.id, database)
             if database in subscriptions:
                 self.charm.postgresql.refresh_subscription(database, subscription_name)
-                logger.debug(
+                logger.info(
                     f"Refreshed subscription {subscription_name} in database {database} due to relation change"
                 )
             else:
@@ -221,7 +235,7 @@ class PostgreSQLLogicalReplication(Object):
                     publication_name,
                     publication["replication-slot-name"],
                 )
-                logger.debug(
+                logger.info(
                     f"Created new subscription {subscription_name} for publication {publication_name} in database {database}"
                 )
                 subscriptions[database] = subscription_name
@@ -230,26 +244,29 @@ class PostgreSQLLogicalReplication(Object):
             if database in publications:
                 continue
             self.charm.postgresql.drop_subscription(database, subscription)
-            logger.debug(f"Dropped redundant subscription {subscription} from database {database}")
+            logger.info(f"Dropped redundant subscription {subscription} from database {database}")
             del subscriptions[database]
 
         self.charm.app_peer_data["logical-replication-subscriptions"] = json.dumps(subscriptions)
 
-    def _on_relation_departed(self, event: RelationDepartedEvent):
+    def _on_relation_departed(self, event: RelationDepartedEvent) -> None:
         if event.departing_unit == self.charm.unit and self.charm._peers is not None:
             self.charm.unit_peer_data.update({"departing": "True"})
 
-    def _on_relation_broken(self, event: RelationBrokenEvent):
+    def _on_relation_broken(self, event: RelationBrokenEvent) -> None:
         if not self.charm._peers or self.charm.is_unit_departing:
             logger.debug(f"{LOGICAL_REPLICATION_RELATION} break skipped due to departing unit")
             return
         if not self.charm.unit.is_leader():
+            logger.debug(
+                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} break early exit due to unit not being a leader"
+            )
             return
         if not self.charm.primary_endpoint:
-            event.defer()
             logger.debug(
-                f"{LOGICAL_REPLICATION_RELATION} break deferred until primary is available"
+                f"Deferring {LOGICAL_REPLICATION_RELATION} break until primary is available"
             )
+            event.defer()
             return
 
         subscriptions = json.loads(
@@ -257,7 +274,7 @@ class PostgreSQLLogicalReplication(Object):
         )
         for database, subscription in subscriptions.items():
             self.charm.postgresql.drop_subscription(database, subscription)
-            logger.debug(
+            logger.info(
                 f"Dropped subscription {subscriptions} from database {database} due to relation break"
             )
         self.charm.app_peer_data["logical-replication-subscriptions"] = ""
@@ -266,21 +283,36 @@ class PostgreSQLLogicalReplication(Object):
 
     # region Events
 
-    def _on_cluster_topology_change(self, event: ClusterTopologyChangeEvent | LeaderElectedEvent):
+    def _on_cluster_topology_change(
+        self, event: ClusterTopologyChangeEvent | LeaderElectedEvent
+    ) -> None:
         if not self.charm.unit.is_leader():
+            logger.debug(
+                "Logical replication tolopoly change early exit due to unit not being a leader"
+            )
             return
         if not len(self.model.relations.get(LOGICAL_REPLICATION_OFFER_RELATION, ())):
+            logger.debug(
+                f"Logical replication tolopoly change early exit due to {LOGICAL_REPLICATION_OFFER_RELATION} connections absence"
+            )
             return
         if not self.charm.primary_endpoint:
+            logger.debug(
+                "Deferring logical replication topology change until primary is available"
+            )
             event.defer()
             return
         for relation in self.model.relations.get(LOGICAL_REPLICATION_OFFER_RELATION, ()):
             self._get_secret(relation.id)
 
-    def _on_secret_changed(self, event: SecretChangedEvent):
+    def _on_secret_changed(self, event: SecretChangedEvent) -> None:
         if not self.charm.unit.is_leader():
+            logger.debug(
+                "Logical replication secret change early exit due to unit not being a leader"
+            )
             return
         if not self.charm.primary_endpoint:
+            logger.debug("Deferring logical replication secret change until primary is available")
             event.defer()
             return
 
@@ -310,6 +342,9 @@ class PostgreSQLLogicalReplication(Object):
         if not self.charm.unit.is_leader():
             return True
         if not self.charm.primary_endpoint:
+            logger.debug(
+                "Marking logical replication config validation as ongoing and deferring event until primary as available"
+            )
             self.charm.app_peer_data["logical-replication-validation"] = "ongoing"
             event.defer()
             return False
@@ -317,7 +352,7 @@ class PostgreSQLLogicalReplication(Object):
             self._apply_updated_subscription_request()
         return True
 
-    def retry_validations(self):
+    def retry_validations(self) -> None:
         """Run recurrent logical replication validation attempt.
 
         For subscribers - try to validate & apply subscription request.
@@ -334,6 +369,12 @@ class PostgreSQLLogicalReplication(Object):
             if json.loads(relation.data[self.model.app].get("errors", "[]")):
                 self._process_offer(relation)
 
+    def has_remote_publisher_errors(self) -> bool:
+        """Check if remote publisher in logical-replication relation has any errors."""
+        return bool(
+            relation := self.model.get_relation(LOGICAL_REPLICATION_RELATION)
+        ) and json.loads(relation.data[relation.app].get("errors", "[]"))
+
     def replication_slots(self) -> dict[str, str]:
         """Get list of all managed replication slots.
 
@@ -347,9 +388,12 @@ class PostgreSQLLogicalReplication(Object):
             for database, publication in resources["publications"].items()
         }
 
-    def _apply_updated_subscription_request(self):
+    def _apply_updated_subscription_request(self) -> None:
         if not (relation := self.model.get_relation(LOGICAL_REPLICATION_RELATION)):
             return
+        logger.debug(
+            "Logical replication config validation is passed, applying config to the active relations"
+        )
         subscription_request_config = json.loads(
             self.charm.config.logical_replication_subscription_request or "{}"
         )
@@ -363,7 +407,7 @@ class PostgreSQLLogicalReplication(Object):
             if database in subscription_request_config:
                 continue
             self.charm.postgresql.drop_subscription(database, subscription)
-            logger.debug(f"Dropped redundant subscription {subscription} from database {database}")
+            logger.info(f"Dropped redundant subscription {subscription} from database {database}")
             del subscriptions[database]
         self.charm.app_peer_data["logical-replication-subscriptions"] = json.dumps(subscriptions)
 
@@ -439,18 +483,18 @@ class PostgreSQLLogicalReplication(Object):
             return False
         if not event.relation.data[event.app].get("secret-id"):
             logger.warning(
-                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} change early exit due to secret absence in remote application bag"
+                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} change early exit due to secret absence in remote application bag (unusual behavior)"
             )
             return False
         if not self.charm.primary_endpoint:
             logger.debug(
-                f"{LOGICAL_REPLICATION_RELATION} #{event.relation.id} change deferring due to primary unavailability"
+                f"Deferring {LOGICAL_REPLICATION_RELATION} #{event.relation.id} change due to primary unavailability"
             )
             event.defer()
             return False
         return True
 
-    def _process_offer(self, relation: Relation):
+    def _process_offer(self, relation: Relation) -> None:
         logger.debug(
             f"Started proccessing offer for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
         )
@@ -550,13 +594,13 @@ class PostgreSQLLogicalReplication(Object):
             f"Successfully processed offer for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
         )
 
-    def _publication_name(self, relation_id: int, database: str):
+    def _publication_name(self, relation_id: int, database: str) -> str:
         return f"relation_{relation_id}_{database}"
 
-    def _replication_slot_name(self, relation_id: int, database: str):
+    def _replication_slot_name(self, relation_id: int, database: str) -> str:
         return f"relation_{relation_id}_{database}"
 
-    def _subscription_name(self, relation_id: int, database: str):
+    def _subscription_name(self, relation_id: int, database: str) -> str:
         return f"relation_{relation_id}_{database}"
 
     def _save_published_resources_info(
@@ -579,7 +623,7 @@ class PostgreSQLLogicalReplication(Object):
     def _create_user(self, relation_id: int) -> tuple[str, str]:
         user = f"logical-replication-relation-{relation_id}"
         password = new_password()
-        logger.debug(
+        logger.info(
             f"Creating new user {user} for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation_id}"
         )
         self.charm.postgresql.create_user(user, password, replication=True)
