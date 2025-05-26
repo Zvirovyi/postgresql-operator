@@ -136,6 +136,9 @@ class PostgreSQLIsTableEmptyError(Exception):
 class PostgreSQLCreatePublicationError(Exception):
     """Exception raised when creating PostgreSQL publication."""
 
+class PostgreSQLPublicationExistsError(Exception):
+    """Exception raised during PostgreSQL publication existence check."""
+
 class PostgreSQLAlterPublicationError(Exception):
     """Exception raised when altering PostgreSQL publication."""
 
@@ -146,7 +149,7 @@ class PostgreSQLCreateSubscriptionError(Exception):
     """Exception raised when creating PostgreSQL subscription."""
 
 class PostgreSQLSubscriptionExistsError(Exception):
-    """Exception raised during subscription existence check."""
+    """Exception raised during PostgreSQL subscription existence check."""
 
 class PostgreSQLUpdateSubscriptionError(Exception):
     """Exception raised when updating PostgreSQL subscription."""
@@ -914,6 +917,18 @@ END; $$;"""
         except psycopg2.Error as e:
             logger.error(f"Failed to create Postgresql publication: {e}")
             raise PostgreSQLCreatePublicationError() from e
+
+    def publication_exists(self, db: str, publication: str) -> bool:
+        """Check whether specified subscription in database exists."""
+        try:
+            with self._connect_to_database(database=db) as connection, connection.cursor() as cursor:
+                cursor.execute(
+                    SQL("SELECT pubname FROM pg_publication WHERE pubname={};").format(Literal(publication))
+                )
+                return cursor.fetchone() is not None
+        except psycopg2.Error as e:
+            logger.error(f"Failed to check Postgresql publication existence: {e}")
+            raise PostgreSQLPublicationExistsError() from e
 
     def alter_publication(self, db: str, name: str, schematables: list[str]) -> None:
         """Alter PostgreSQL publication."""

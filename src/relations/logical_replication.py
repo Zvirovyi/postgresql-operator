@@ -8,6 +8,7 @@ TODO: add description after specification is accepted.
 
 import json
 import logging
+from os import eventfd
 
 from ops import (
     BlockedStatus,
@@ -100,6 +101,8 @@ class PostgreSQLLogicalReplication(Object):
             f"Sharing logical replciation secret to the {LOGICAL_REPLICATION_OFFER_RELATION} #{event.relation.id}"
         )
         secret.grant(event.relation)
+
+        self._save_published_resources_info(str(event.relation.id), secret.id, {})
         event.relation.data[self.model.app]["secret-id"] = secret.id
 
     def _on_offer_relation_changed(self, event: RelationChangedEvent):
@@ -141,14 +144,29 @@ class PostgreSQLLogicalReplication(Object):
             event.defer()
             return
 
-        # TODO: fix empty relation data after defer
-        publications = json.loads(event.relation.data[self.model.app].get("publications", "{}"))
-        for database, publication in publications.items():
-            self.charm.postgresql.drop_publication(database, publication["publication-name"])
+        published_resources = json.loads(
+            self.charm.app_peer_data.get("logical-replication-published-resources", "{}")
+        )
+        active_relation_ids = [
+            str(relation.id)
+            for relation in self.model.relations.get(LOGICAL_REPLICATION_OFFER_RELATION, ())
+        ]
 
-        secret = self._get_secret(event.relation.id)
-        self.charm.postgresql.delete_user(secret.peek_content()["username"])
-        secret.remove_all_revisions()
+        for relation_id, relation_resources in published_resources.copy().items():
+            if relation_id in active_relation_ids:
+                continue
+            try:
+                secret = self.model.get_secret(id=relation_resources["secret-id"])
+                self.charm.postgresql.delete_user(secret.peek_content()["username"])
+                secret.remove_all_revisions()
+            except SecretNotFoundError:
+                pass
+            for database, publication in relation_resources["publications"].items():
+                self.charm.postgresql.drop_publication(database, publication["publication-name"])
+            del published_resources[relation_id]
+            self.charm.app_peer_data["logical-replication-published-resources"] = json.dumps(
+                published_resources
+            )
 
         self.charm.update_config()
 
@@ -323,10 +341,10 @@ class PostgreSQLLogicalReplication(Object):
         """
         return {
             publication["replication-slot-name"]: database
-            for relation in self.model.relations.get(LOGICAL_REPLICATION_OFFER_RELATION, ())
-            for database, publication in json.loads(
-                relation.data[self.model.app].get("publications", "{}")
-            ).items()
+            for resources in json.loads(
+                self.charm.app_peer_data.get("logical-replication-published-resources", "{}")
+            ).values()
+            for database, publication in resources["publications"].items()
         }
 
     def _apply_updated_subscription_request(self):
@@ -433,41 +451,57 @@ class PostgreSQLLogicalReplication(Object):
         return True
 
     def _process_offer(self, relation: Relation):
+        logger.debug(
+            f"Started proccessing offer for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
+        )
+
         subscriptions_request = json.loads(
             relation.data[relation.app].get("subscription-request", "{}")
         )
         publications = json.loads(relation.data[self.model.app].get("publications", "{}"))
-        user = self._get_secret(relation.id).peek_content()["username"]
+        secret = self._get_secret(relation.id)
+        user = secret.peek_content()["username"]
         errors = []
 
         for database, publication in publications.copy().items():
             if database in subscriptions_request:
                 continue
-            self.charm.postgresql.drop_publication(database, publication["publication-name"])
-            logger.debug(
-                f"Dropped redundant publication {publication['publication-name']} from database {database}"
+            logger.info(
+                f"Dropping redundant publication {publication['publication-name']} in database {database} from {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
             )
+            self.charm.postgresql.drop_publication(database, publication["publication-name"])
             del publications[database]
+            logger.info(
+                f"Revoking replication privileges on database {database} from user {user} from {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
+            )
             self.charm.postgresql.revoke_replication_privileges(
                 user, database, publication["tables"]
             )
-            logger.debug(f"Revoked replication privileges on database {database} from user {user}")
 
         for database, tables in subscriptions_request.items():
             if database not in publications:
                 if validation_error := self._validate_new_publication(database, tables):
                     errors.append(validation_error)
-                    logger.debug(f"Cannot create new publication: {validation_error}")
+                    logger.error(
+                        f"Cannot create new publication for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}: {validation_error}"
+                    )
                     continue
-                self.charm.postgresql.grant_replication_privileges(user, database, tables)
-                logger.debug(
-                    f"Granted replication privileges on database {database} for user {user}"
-                )
                 publication_name = self._publication_name(relation.id, database)
-                self.charm.postgresql.create_publication(database, publication_name, tables)
-                logger.debug(
-                    f"Created new publication {publication_name} for tables {', '.join(tables)} in database {database}"
+                if self.charm.postgresql.publication_exists(database, publication_name):
+                    error = f"conflicting publication {publication_name} in database {database}"
+                    errors.append(error)
+                    logger.error(
+                        f"Cannot create new publication for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}: {error}"
+                    )
+                    continue
+                logger.info(
+                    f"Granting replication privileges on database {database} for user {user} for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
                 )
+                self.charm.postgresql.grant_replication_privileges(user, database, tables)
+                logger.info(
+                    f"Creating new publication {publication_name} for tables {', '.join(tables)} in database {database} for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
+                )
+                self.charm.postgresql.create_publication(database, publication_name, tables)
                 publications[database] = {
                     "publication-name": publication_name,
                     "replication-slot-name": self._replication_slot_name(relation.id, database),
@@ -479,27 +513,42 @@ class PostgreSQLLogicalReplication(Object):
                     database, tables, publication_tables
                 ):
                     errors.append(validation_error)
-                    logger.debug(
-                        f"Cannot alter publication {publication_name}: {validation_error}"
+                    logger.error(
+                        f"Cannot alter publication {publication_name} for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}: {validation_error}"
                     )
                     continue
+                if not self.charm.postgresql.publication_exists(database, publication_name):
+                    errors.append(
+                        f"managed publication {publication_name} in database {database} can't be found"
+                    )
+                    logger.error(
+                        f"Can't find managed publication {publication_name} in database {database} for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
+                    )
+                    continue
+                logger.info(
+                    f"Altering replication privileges on database {database} for user {user} for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
+                )
                 self.charm.postgresql.grant_replication_privileges(
                     user, database, tables, publication_tables
                 )
-                logger.debug(
-                    f"Altered replication privileges on database {database} for user {user}"
+                logger.info(
+                    f"Altering publication {publication_name} tables from {','.join(publication_tables)} to {','.join(tables)} in database {database} for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
                 )
                 self.charm.postgresql.alter_publication(database, publication_name, tables)
-                logger.debug(
-                    f"Altered publication {publication_name} tables from {','.join(publication_tables)} to {','.join(tables)} in database {database}"
-                )
                 publications[database]["tables"] = tables
+            self._save_published_resources_info(str(relation.id), secret.id, publications)
+            relation.data[self.model.app]["publications"] = json.dumps(publications)
 
+        self._save_published_resources_info(str(relation.id), secret.id, publications)
         relation.data[self.model.app].update({
             "errors": json.dumps(errors),
             "publications": json.dumps(publications),
         })
         self.charm.update_config()
+
+        logger.debug(
+            f"Successfully processed offer for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation.id}"
+        )
 
     def _publication_name(self, relation_id: int, database: str):
         return f"relation_{relation_id}_{database}"
@@ -509,6 +558,23 @@ class PostgreSQLLogicalReplication(Object):
 
     def _subscription_name(self, relation_id: int, database: str):
         return f"relation_{relation_id}_{database}"
+
+    def _save_published_resources_info(
+        self,
+        relation_id: str,
+        secret_id: str,
+        publications: dict[str, dict[str, str | list[str]]],
+    ) -> None:
+        published_resources = json.loads(
+            self.charm.app_peer_data.get("logical-replication-published-resources", "{}")
+        )
+        published_resources[relation_id] = {
+            "secret-id": secret_id,
+            "publications": publications,
+        }
+        self.charm.app_peer_data["logical-replication-published-resources"] = json.dumps(
+            published_resources
+        )
 
     def _create_user(self, relation_id: int) -> tuple[str, str]:
         user = f"logical-replication-relation-{relation_id}"
@@ -540,7 +606,6 @@ class PostgreSQLLogicalReplication(Object):
             logger.debug(
                 f"Creating new secret for {LOGICAL_REPLICATION_OFFER_RELATION} #{relation_id}"
             )
-            pass
         username, password = self._create_user(relation_id)
         return self.charm.model.app.add_secret(
             content={
