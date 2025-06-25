@@ -4,6 +4,7 @@ from asyncio import gather
 import psycopg2
 import pytest as pytest
 from pytest_operator.plugin import OpsTest
+from tenacity import Retrying, stop_after_delay, wait_fixed
 
 from integration import markers
 from integration.ha_tests.helpers import get_cluster_roles
@@ -284,6 +285,7 @@ async def test_pg2_resolve_dynamic_error(ops_test: OpsTest):
         psycopg2.connect(connection_string) as connection,
         connection.cursor() as cursor,
     ):
+        connection.autocommit = True
         cursor.execute("DELETE FROM test_table;")
     async with ops_test.fast_forward():
         await ops_test.model.wait_for_idle(status="active", timeout=500)
@@ -353,18 +355,24 @@ async def _wait_for_leader_on_blocked(ops_test: OpsTest, app_name: str) -> None:
 async def _create_test_table(
     ops_test: OpsTest, data_integrator_app_name: str, table_name: str = "test_table"
 ) -> None:
-    with (
-        psycopg2.connect(
-            await build_connection_string(
-                ops_test,
-                data_integrator_app_name,
-                DATA_INTEGRATOR_RELATION,
-                database=TESTING_DATABASE,
-            )
-        ) as connection,
-        connection.cursor() as cursor,
-    ):
-        cursor.execute(f"CREATE TABLE {table_name} (test_column text);")
+    connection_string = await build_connection_string(
+        ops_test,
+        data_integrator_app_name,
+        DATA_INTEGRATOR_RELATION,
+        database=TESTING_DATABASE,
+    )
+    print(f"connection_string: {connection_string}")
+    connection = None
+    try:
+        for attempt in Retrying(stop=stop_after_delay(120), wait=wait_fixed(3), reraise=True):
+            with attempt:
+                connection = psycopg2.connect(connection_string)
+                connection.autocommit = True
+                with connection.cursor() as cursor:
+                    cursor.execute(f"CREATE TABLE {table_name} (test_column text);")
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 async def _insert_test_data(
