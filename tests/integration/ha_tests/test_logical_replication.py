@@ -6,7 +6,6 @@ import pytest as pytest
 from pytest_operator.plugin import OpsTest
 from tenacity import Retrying, stop_after_delay, wait_fixed
 
-from integration import markers
 from integration.ha_tests.helpers import get_cluster_roles
 from integration.helpers import CHARM_BASE, get_leader_unit
 from integration.new_relations.helpers import build_connection_string
@@ -25,7 +24,6 @@ DATABASE_APP_CONFIG = {"profile": "testing"}
 TESTING_DATABASE = "testdb"
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_deploy(ops_test: OpsTest, charm):
     await gather(
@@ -92,7 +90,6 @@ async def test_deploy(ops_test: OpsTest, charm):
         await ops_test.model.wait_for_idle(status="active", timeout=500)
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_pg2_publisher_error(ops_test: OpsTest):
     await _create_test_table(ops_test, SECOND_DATA_INTEGRATOR_APP_NAME)
@@ -106,7 +103,6 @@ async def test_pg2_publisher_error(ops_test: OpsTest):
     await _wait_for_leader_on_blocked(ops_test, SECOND_DATABASE_APP_NAME)
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_pg3_local_error(ops_test: OpsTest):
     pg3_config = DATABASE_APP_CONFIG.copy()
@@ -120,7 +116,6 @@ async def test_pg3_local_error(ops_test: OpsTest):
         f"{DATABASE_APP_NAME}:logical-replication-offer",
         f"{THIRD_DATABASE_APP_NAME}:logical-replication",
     )
-    await ops_test.model.applications[THIRD_DATABASE_APP_NAME].set_config(pg3_config)
     await _wait_for_leader_on_blocked(ops_test, THIRD_DATABASE_APP_NAME)
 
     pg3_config["logical_replication_subscription_request"] = json.dumps({
@@ -130,7 +125,6 @@ async def test_pg3_local_error(ops_test: OpsTest):
     await _wait_for_leader_on_blocked(ops_test, THIRD_DATABASE_APP_NAME)
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_resolve_errors(ops_test: OpsTest):
     await gather(
@@ -143,7 +137,6 @@ async def test_resolve_errors(ops_test: OpsTest):
         await ops_test.model.wait_for_idle(status="active")
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_replication(ops_test: OpsTest):
     await gather(
@@ -157,7 +150,6 @@ async def test_replication(ops_test: OpsTest):
     )
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_switchover(ops_test: OpsTest):
     publisher_leader = await get_leader_unit(ops_test, DATABASE_APP_NAME)
@@ -176,7 +168,6 @@ async def test_switchover(ops_test: OpsTest):
         await ops_test.model.wait_for_idle(status="active", timeout=500)
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_replication_after_switchover(ops_test: OpsTest):
     await gather(
@@ -189,7 +180,6 @@ async def test_replication_after_switchover(ops_test: OpsTest):
     )
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_pg3_extend_subscription(ops_test: OpsTest):
     await _create_test_table(ops_test, THIRD_DATA_INTEGRATOR_APP_NAME)
@@ -209,7 +199,6 @@ async def test_pg3_extend_subscription(ops_test: OpsTest):
     )
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_pg2_change_subscription(ops_test: OpsTest):
     await _create_test_table(ops_test, SECOND_DATA_INTEGRATOR_APP_NAME, "test_table2")
@@ -231,7 +220,6 @@ async def test_pg2_change_subscription(ops_test: OpsTest):
     )
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_replication_after_subscriptions_changes(ops_test: OpsTest):
     await gather(
@@ -246,7 +234,6 @@ async def test_replication_after_subscriptions_changes(ops_test: OpsTest):
     )
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_pg2_dynamic_error(ops_test: OpsTest):
     pg2_config = DATABASE_APP_CONFIG.copy()
@@ -257,7 +244,6 @@ async def test_pg2_dynamic_error(ops_test: OpsTest):
     await _wait_for_leader_on_blocked(ops_test, SECOND_DATABASE_APP_NAME)
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_replication_during_dynamic_error(ops_test: OpsTest):
     await gather(
@@ -272,7 +258,6 @@ async def test_replication_during_dynamic_error(ops_test: OpsTest):
     )
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_pg2_resolve_dynamic_error(ops_test: OpsTest):
     connection_string = await build_connection_string(
@@ -292,7 +277,6 @@ async def test_pg2_resolve_dynamic_error(ops_test: OpsTest):
     await _check_test_data(ops_test, SECOND_DATA_INTEGRATOR_APP_NAME, "fourth")
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_pg2_remove(ops_test: OpsTest):
     await ops_test.model.remove_application(SECOND_DATA_INTEGRATOR_APP_NAME, block_until_done=True)
@@ -312,7 +296,6 @@ async def test_pg2_remove(ops_test: OpsTest):
         )
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_replication_after_pg2_removal(ops_test: OpsTest):
     await gather(
@@ -325,7 +308,6 @@ async def test_replication_after_pg2_removal(ops_test: OpsTest):
     )
 
 
-@markers.juju3
 @pytest.mark.abort_on_fail
 async def test_pg3_remove_relation(ops_test: OpsTest):
     await ops_test.model.applications[DATABASE_APP_NAME].remove_relation(
@@ -361,7 +343,6 @@ async def _create_test_table(
         DATA_INTEGRATOR_RELATION,
         database=TESTING_DATABASE,
     )
-    print(f"connection_string: {connection_string}")
     connection = None
     try:
         for attempt in Retrying(stop=stop_after_delay(120), wait=wait_fixed(3), reraise=True):
